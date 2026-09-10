@@ -64,11 +64,24 @@ sbp_bootstrap_dependencies() {
 sbp_bootstrap_main() (
   umask 077
   local repo=welenwho/sbp-release work= base=/var/tmp version choice archive free required unpacked qnap=false
+  local node_mode=false node_token= entry=install.sh
+  if [[ ${1:-} == --node ]]; then
+    [[ $# -ge 3 && $2 == --release-version ]] || { sbp_bootstrap_error '节点引导缺少固定版本。'; exit 1; }
+    version=$3; shift 3
+    sbp_bootstrap_version "$version" || { sbp_bootstrap_error '节点安装版本无效。'; exit 1; }
+    IFS= read -r -n 513 node_token || [[ -n "$node_token" ]] || exit 1
+    [[ ${#node_token} -ge 16 && ${#node_token} -le 512 && "$node_token" =~ ^[A-Za-z0-9._~-]+$ ]] || { sbp_bootstrap_error '一次性加入码无效。'; exit 1; }
+    node_mode=true
+    entry=install-node.sh
+    [[ ! -e /etc/sbp/deployment-mode && ! -e /etc/sbp/native.env ]] || { sbp_bootstrap_error '目标机已有 SBP，请使用面板接管或节点管理，不能重复加入。'; exit 1; }
+  fi
   [[ $(uname -s) == Linux ]] || { sbp_bootstrap_error '安装器仅支持 Linux。'; exit 1; }
   case "$(uname -m)" in x86_64|amd64|aarch64|arm64) ;; *) sbp_bootstrap_error '目前只提供 amd64 和 arm64 安装包。'; exit 1 ;; esac
   command -v curl >/dev/null || { sbp_bootstrap_error '请先安装 curl。'; exit 1; }
   sbp_bootstrap_terminal || exit 1
   [[ ! -f /etc/config/qpkg.conf ]] || qnap=true
+  if $node_mode && $qnap; then sbp_bootstrap_error '此引导用于标准 Linux Docker 节点，不能覆盖 QNAP Container Station。'; exit 1; fi
+  if ! $node_mode; then
   printf '\nSBP 安装 / 升级\n1) 最新稳定版（默认）\n2) 指定稳定版本\n0) 退出\n'
   read -r -p '请选择 [1]: ' choice || exit 1
   case "${choice:-1}" in
@@ -78,6 +91,7 @@ sbp_bootstrap_main() (
     0) exit 0 ;;
     *) sbp_bootstrap_error '无效选项。'; exit 1 ;;
   esac
+  fi
   # Never unpack into a small RAM-backed /tmp, notably QTS's 64 MB tmpfs.
   while true; do
     if [[ -d "$base" && -w "$base" ]]; then
@@ -113,6 +127,14 @@ sbp_bootstrap_main() (
   [[ "$free" =~ ^[0-9]+$ ]] && ((free >= required)) || { sbp_bootstrap_error '解压空间不足，未执行安装。'; exit 1; }
   unzip -q "$work/$archive" -d "$work" || exit 1
   [[ -f "$work/sbp-$version/install.sh" && $(tr -d '\r\n' <"$work/sbp-$version/VERSION") == "$version" ]] || exit 1
+  if $node_mode; then
+    [[ -f "$work/sbp-$version/$entry" ]] || { sbp_bootstrap_error '安装包不包含节点安装器。'; exit 1; }
+    printf '%s' "$node_token" >"$work/enrollment.token"
+    chmod 0600 "$work/enrollment.token"
+    unset node_token
+    set -- "$@" --token-file "$work/enrollment.token" --yes
+    printf '\n[SBP] 正在安装受管节点，完成后自动注册到中心。\n'
+  fi
   if $qnap; then
     printf '\n[SBP] QNAP 安装包已校验并保留在 %s\n请使用包内 qnap-runtime-compose.yaml；本入口不会使用通用安装器覆盖 Container Station。\n' "$work/sbp-$version"
     work=
@@ -120,10 +142,10 @@ sbp_bootstrap_main() (
   fi
   # The child owns upgrade locks, credentials, core preservation and rollback.
   # Keep the parent alive so EXIT cleanup does not discard the package early.
-  if ((EUID == 0)); then bash "$work/sbp-$version/install.sh" "$@"
+  if ((EUID == 0)); then bash "$work/sbp-$version/$entry" "$@"
   else
     command -v sudo >/dev/null || { sbp_bootstrap_error '需要 root 或 sudo 权限。'; exit 1; }
-    sudo bash "$work/sbp-$version/install.sh" "$@"
+    sudo bash "$work/sbp-$version/$entry" "$@"
   fi
 )
 
