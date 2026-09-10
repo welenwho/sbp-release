@@ -20,6 +20,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/welenwho/sbp-release/main/in
 
 工作目录默认 `/var/tmp`，不会直接向小容量 `/tmp` 解压；空间不足时提示选择目录。QNAP 应选择 `/share` 下持久数据卷。
 
+## 添加受管节点
+
+在中心面板的“节点 → 添加节点”填写节点名称、公网主机名/IP，复制生成的一键命令到新 Linux 主机的 Bash 终端执行。无需事先下载 SBP 安装包；脚本会下载与中心一致的公开版本、校验、调用 Docker 节点安装器并等待注册成功。一次性 Token 不会放到下载 URL 或节点 `.env`。
+
+目标机需要 Bash、curl，以及 root 或 sudo 权限。缺少 Docker/Compose 时由节点安装器安装。已有面板请使用接管流程；QNAP 继续使用专用运行结构。中心对应版本的安装包与镜像必须已公开发布。
+
 ## 手动下载
 
 从 [Releases](https://github.com/welenwho/sbp-release/releases) 下载 ZIP 与同名 `.sha256` 文件，校验后解压执行 `install.sh`。每个版本附带维护文档，保留最近 20 个稳定版本。
