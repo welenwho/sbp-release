@@ -76,8 +76,24 @@ sbp_bootstrap_main() (
     IFS= read -r -n 513 node_token || [[ -n "$node_token" ]] || exit 1
     [[ ${#node_token} -ge 16 && ${#node_token} -le 512 && "$node_token" =~ ^[A-Za-z0-9._~-]+$ ]] || { sbp_bootstrap_error '一次性加入码无效。'; exit 1; }
     node_mode=true
-    entry=install-node.sh
-    [[ ! -e /etc/sbp/deployment-mode && ! -e /etc/sbp/native.env ]] || { sbp_bootstrap_error '目标机已有 SBP，请使用面板接管或节点管理，不能重复加入。'; exit 1; }
+    local node_kind=docker
+    local -a node_arguments=()
+    while (($#)); do
+      if [[ "$1" == --node-mode ]]; then node_kind=${2:-}; shift 2
+      else node_arguments+=("$1"); shift; fi
+    done
+    set -- "${node_arguments[@]}"
+    case "$node_kind" in
+      docker) entry=install-node.sh ;;
+      native) entry=install-node-native.sh ;;
+      *) sbp_bootstrap_error '节点安装模式无效。'; exit 1 ;;
+    esac
+    if [[ -e /etc/sbp/deployment-mode || -e /etc/sbp/native.env ]]; then
+      if [[ "$node_kind" != native || -s /var/lib/sbp-node/node.id ]] ||
+        ! grep -Fxq 'SBP_NATIVE_NODE_ONLY=true' /etc/sbp/native.env 2>/dev/null; then
+        sbp_bootstrap_error '目标机已有 SBP，请使用面板接管或节点管理，不能重复加入。'; exit 1
+      fi
+    fi
   fi
   [[ $(uname -s) == Linux ]] || { sbp_bootstrap_error '安装器仅支持 Linux。'; exit 1; }
   case "$(uname -m)" in x86_64|amd64|aarch64|arm64) ;; *) sbp_bootstrap_error '目前只提供 amd64 和 arm64 安装包。'; exit 1 ;; esac
