@@ -49,7 +49,8 @@ sbp_bootstrap_dependencies() {
   local answer
   if command -v unzip >/dev/null 2>&1 && { command -v sha256sum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1; }; then return 0; fi
   printf '[SBP] 需要安装 unzip、CA 证书和 SHA-256 校验工具。\n'
-  read -r -p '安装这些依赖？[Y/n]: ' answer || return 1
+  if [[ ${node_mode:-false} == true ]]; then answer=y
+  else read -r -p '安装这些依赖？[Y/n]: ' answer || return 1; fi
   case "$answer" in ''|y|Y) ;; *) return 1 ;; esac
   local -a privilege=(env)
   if ((EUID != 0)); then command -v sudo >/dev/null || return 1; privilege=(sudo); fi
@@ -63,6 +64,9 @@ sbp_bootstrap_dependencies() {
 }
 sbp_bootstrap_main() (
   umask 077
+  declare -F sbp_node_stage >/dev/null || sbp_node_stage() { :; }
+  sbp_node_stage preflight
+  trap 'rc=$?; if ((rc!=0)); then sbp_node_stage "${sbp_node_phase:-preflight}" true; fi' ERR
   local repo=welenwho/sbp-release work= base=/var/tmp version choice archive free required unpacked qnap=false
   local node_mode=false node_token= entry=install.sh
   if [[ ${1:-} == --node ]]; then
@@ -78,7 +82,7 @@ sbp_bootstrap_main() (
   [[ $(uname -s) == Linux ]] || { sbp_bootstrap_error '安装器仅支持 Linux。'; exit 1; }
   case "$(uname -m)" in x86_64|amd64|aarch64|arm64) ;; *) sbp_bootstrap_error '目前只提供 amd64 和 arm64 安装包。'; exit 1 ;; esac
   command -v curl >/dev/null || { sbp_bootstrap_error '请先安装 curl。'; exit 1; }
-  sbp_bootstrap_terminal || exit 1
+  if ! $node_mode; then sbp_bootstrap_terminal || exit 1; fi
   [[ ! -f /etc/config/qpkg.conf ]] || qnap=true
   if $node_mode && $qnap; then sbp_bootstrap_error '此引导用于标准 Linux Docker 节点，不能覆盖 QNAP Container Station。'; exit 1; fi
   if ! $node_mode; then
@@ -105,7 +109,7 @@ sbp_bootstrap_main() (
     if [[ "$free" =~ ^[0-9]+$ ]] && ((free >= 262144)); then break; fi
   done
   work=$(mktemp -d "$base/sbp-download.XXXXXX") || exit 1
-  trap '[[ -z "$work" ]] || rm -rf -- "$work"' EXIT
+  trap 'rc=$?; if ((rc!=0)); then sbp_node_stage "${sbp_node_phase:-preflight}" true; fi; [[ -z "$work" ]] || rm -rf -- "$work"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   sbp_bootstrap_dependencies || exit 1
@@ -115,9 +119,11 @@ sbp_bootstrap_main() (
     sbp_bootstrap_version "$version" || { sbp_bootstrap_error '发布版本信息无效。'; exit 1; }
   fi
   archive="sbp-$version.zip"
+  sbp_node_stage download
   printf '\n[SBP] 下载稳定版 %s\n' "$version"
   sbp_bootstrap_fetch "https://github.com/$repo/releases/download/v$version/$archive.sha256" "$work/$archive.sha256" || exit 1
   sbp_bootstrap_fetch "https://github.com/$repo/releases/download/v$version/$archive" "$work/$archive" || exit 1
+  sbp_node_stage checking
   sbp_bootstrap_verify "$work/$archive" "$work/$archive.sha256" || { sbp_bootstrap_error 'SHA-256 校验失败，未执行安装。'; exit 1; }
   sbp_bootstrap_archive_safe "$work/$archive" "sbp-$version" "$work/entries" || { sbp_bootstrap_error '安装包路径或类型无效。'; exit 1; }
   unpacked=$(LC_ALL=C unzip -l "$work/$archive" | awk 'END {print $1}')
@@ -142,10 +148,11 @@ sbp_bootstrap_main() (
   fi
   # The child owns upgrade locks, credentials, core preservation and rollback.
   # Keep the parent alive so EXIT cleanup does not discard the package early.
+  sbp_node_stage installing
   if ((EUID == 0)); then bash "$work/sbp-$version/$entry" "$@"
   else
     command -v sudo >/dev/null || { sbp_bootstrap_error '需要 root 或 sudo 权限。'; exit 1; }
-    sudo bash "$work/sbp-$version/$entry" "$@"
+    sudo env SBP_ONBOARDING_URL="${SBP_ONBOARDING_URL:-}" SBP_ONBOARDING_AUTH_FILE="${SBP_ONBOARDING_AUTH_FILE:-}" bash "$work/sbp-$version/$entry" "$@"
   fi
 )
 
